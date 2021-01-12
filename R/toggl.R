@@ -281,9 +281,8 @@ toggl_update_buttons <- function(input, output, session) {
   if(toggl_is_running(input$token)) {
     rt <- toggl_get_running_task(input$token)
     updateTextInput(session, "description", value=rt$description)
-    output$timer <- renderText(toggl_elapsed())
     updateActionButton(session, "stop", label = paste0("Stop (",
-                                                       toggl_elapsed(),
+                                                       toggl_elapsed(input$token),
                                                        "mins)"))
     shinyjs::disable("start")
     shinyjs::enable("stop")
@@ -301,7 +300,7 @@ toggl_formatted_time <- function(){
   format(ct, '%Y-%m-%dT%H:%M:%SZ')
 }
 
-toggl_elapsed <- function() {
+toggl_elapsed <- function(token) {
   ct <- toggl_formatted_time()
   ct <- as.POSIXlt(ct,format = '%Y-%m-%dT%H:%M:%SZ' )
   st <- as.POSIXlt(toggl_get_running_task(token)$start,
