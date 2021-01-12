@@ -10,7 +10,7 @@
 logClockify <- function() {
 
   ui <- miniPage(title = "timeR",
-                 gadgetTitleBar("Clockify Logger"),
+                 gadgetTitleBar("Clockify Logger", left = NULL),
                  miniContentPanel(
                    shinyjs::useShinyjs(),
                    textInput("token", HTML("<a href=https://clockify.me/user/settings>User Token</a>")),
@@ -73,7 +73,7 @@ logClockify <- function() {
     })
 
   }
-  runGadget(ui, server,  viewer = dialogViewer("timeR"))
+  runGadget(ui, server)
 }
 
 

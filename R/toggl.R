@@ -9,7 +9,7 @@
 logToggl <- function() {
 
   ui <- miniPage(title = "timeR",
-                 gadgetTitleBar("Toggl Logger"),
+                 gadgetTitleBar("Toggl Logger", left = NULL),
                  miniContentPanel(
                    shinyjs::useShinyjs(),
                    textInput("token", HTML("<a href=https://track.toggl.com/profile>User Token</a>")),
@@ -68,7 +68,7 @@ logToggl <- function() {
       stopApp(TRUE)
     })
   }
-  runGadget(ui, server,  viewer = dialogViewer("timeR"))
+  runGadget(ui, server)
 }
 
 #' GET requests to toggl endpoints
