@@ -1,0 +1,9 @@
+Name: Log Clockify
+Description: Logs hours with your favorite time managment web app.
+Binding: logClockify
+Interactive: true
+
+Name: Log Toggl
+Description: Logs hours with your favorite time managment web app.
+Binding: logToggl
+Interactive: true
