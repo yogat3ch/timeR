@@ -16,7 +16,7 @@ remotes::install_github("erikor/timeR")
 
 ## Usage
 
-Load the library with `library(timeR)`, and then click the Addins button in the 
+Click the Addins button in the 
 Rstudio toolbar and select "Log Toggl" or "Log Clockify". The interface will 
 open in the RStudio viewer, and you can enter your access token (by default, 
 this value will be saved in your OS's keychain so you do not need to enter it 
