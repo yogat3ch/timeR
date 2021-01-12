@@ -1,8 +1,8 @@
 
 # timeR
 
-The goal of timeR is to make it simple to log time on projects with using 
-RStudio simple. All that is required is your access token from either platform 
+The goal of timeR is to make it simple to log time on toggl or clockify while 
+working in RStudio. All that is required is your access token from either platform 
 (or both). You can then start and stop the timer for your projects with the 
 add in.
 
