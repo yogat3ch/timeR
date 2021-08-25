@@ -159,7 +159,7 @@ clockify_get_workspaces <- function(token = NULL) {
 #'
 #' @return List of projects, with name and id for each workspace
 #' @export
-clockify_get_projects <- function(workspace_id, token = NULL) {
+clockify_get_projects <- function(workspace_id = clockify_get_workspaces()[[1]], token = NULL) {
   pr <- clockify_get(paste0("workspaces/", workspace_id, "/projects"),
                      token)
   tryCatch({
@@ -231,6 +231,8 @@ clockify_stop_timer <- function(workspace_id, token=NULL) {
 #' @return ID of authorized user
 #' @export
 clockify_get_user <- function(token) {
+  if (missing(token))
+    token <- key_get("CLOCKIFY_TOKEN")
   clockify_get("/user", token)$id
 }
 
@@ -308,3 +310,100 @@ clockify_is_running <- function(workspace_id, token) {
   round(as.numeric(difftime(ct, st, units = "mins")))
 }
 
+
+.reports <- list(url = "https://reports.api.clockify.me/v1",
+                 path = rlang::expr(list(ws = "workspaces", wid = workspaceId, rep = "reports",
+                                         type = NULL)))
+
+clockify_get_report <-
+  function(workspaceId = clockify_get_workspaces()[[1]],
+           type = c("summary", "detailed", "weekly")[1],
+           dateRangeStart = lubridate::floor_date(Sys.time(), "month"),
+           dateRangeEnd = Sys.time(),
+           project = clockify_get_projects()[[1]],
+           filter,
+           exportType = c("CSV", "JSON")[1],
+           token,
+           ...) {
+    if (missing(filter)) {
+      filter <- purrr::when(type,
+                  . == "summary" ~ list(groups = list("PROJECT")),
+                  . == "detailed" ~ list(page = 1, pageSize = 200),
+                  . == "weekly" ~ list(group = "USER",
+                                       subgroup = "TIME"))
+
+    }
+    type <- UU::match_letters(type, c("summary", "detailed", "weekly"))
+
+    .url <- httr::parse_url(.reports$url)
+    .url$path <- rlang::eval_bare(.reports$path)
+    .url$path$type <- type
+    .body <- rlang::dots_list(..., .named = TRUE)
+    .body$dateRangeStart <- paste0(lubridate::format_ISO8601(dateRangeStart), ".000Z")
+    .body$dateRangeEnd <- paste0(lubridate::format_ISO8601(dateRangeEnd), ".000Z")
+    # add appropriate filter type
+    if (filter$pageSize > 200) {
+      filter$pageSize <- 200
+      rlang::warn("pageSize must be 200 or less")
+    }
+
+    .body[[paste0(type, "Filter")]] <- filter
+    .body$exportType <-
+      UU::match_letters(exportType, c("JSON", "CSV", "XLSX", "PDF"))
+    env <- environment()
+    # Construct filters for simple entries
+    purrr::iwalk(.body, ~{
+      if (!inherits(.x, "list") && UU::is_legit(.x) && .y %in% c("users", "clients", "projects", "tags")) {
+        .body[[.y]] <<- list(ids = list(.x), status = "ALL")
+        .body[[.y]][[switch(.y, tags = "containedInTimeentry", clients = , projects = , users = "contains")]] <- "CONTAINS"
+      }
+    })
+
+
+
+
+    # .body$Projects <- list(
+    #   ids = project,
+    #   contains = "CONTAINS",
+    #   status = "ALL"
+    # )
+    if(missing(token))
+      token <- key_get("CLOCKIFY_TOKEN")
+    if(length(token) == 0)
+      stop("No user token provided.")
+
+    req <-
+      httr::content(httr::POST(
+        httr::build_url(.url),
+        body = .body,
+        encode = "json",
+        add_headers('X-Api-Key' = token)
+      ), encoding = "UTF-8")
+
+    num_entries <- purrr::when(.body$exportType,
+                               . == "JSON" ~ length(req$timeentries),
+                               . == "CSV" ~ nrow(req))
+    # handle pagination
+    if (num_entries == filter$pageSize) {
+      pages <- list(req)
+      while (num_entries == filter$pageSize) {
+        .body$detailedFilter$page <- .body$detailedFilter$page + 1
+        pages[[.body$detailedFilter$page]] <-
+          httr::content(httr::POST(
+            httr::build_url(.url),
+            body = .body,
+            encode = "json",
+            add_headers('X-Api-Key' = token)
+          ), encoding = "UTF-8")
+      }
+      if (.body$exportType == "CSV") {
+        out <- dplyr::bind_rows(pages)
+      } else {
+        out <- pages
+      }
+    } else {
+      out <- req
+    }
+
+    out
+  }
