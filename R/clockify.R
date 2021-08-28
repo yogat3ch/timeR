@@ -76,6 +76,32 @@ logClockify <- function() {
   runGadget(ui, server)
 }
 
+#' @title Set up Clockify credentials for use in \code{clockify_*} functions
+#' @description Add Clockify credentials to \link[keyring] for use in \code{clockify_*} functions
+#' @param api_key \code{(character)} API Key. See \href{https://clockify.me/user/settings}{User Settings > API}
+#' @return Sets the token in the \link[keyring]{backends} for your OS
+setup_clockify <- function(api_key) {
+  keyring::key_set_with_value("CLOCKIFY_TOKEN", password = api_key)
+  message("CLOCKIFY_TOKEN set in ", keyring::default_backend()$name)
+}
+
+#' @title Clockify API URL
+#' @description A single object for the API URL such that it can be easily updated if the API is updated
+api_url <- "https://api.clockify.me/api/v1/"
+
+#' @title Clockify API Report URL
+#' @description A single object for the API Report URL such that it can be easily updated if the API is updated
+report_url = "https://reports.api.clockify.me/v1"
+
+#' @title Is character a Clockify ID?
+#' @description Determines whether character is a Clockify ID with 24 characters
+#' @param x \code{(character)}
+#' @return \code{(logical)}
+is_id <- function(x) {
+  nchar(x) == 24 && !grepl("[A-Z\\_\\.]+", x) && grepl("[0-9a-z]+", x)
+}
+
+
 
 #' GET requests to clockify endpoints
 #'
@@ -89,16 +115,48 @@ logClockify <- function() {
 #' @import httr
 #' @import keyring
 #' @export
-clockify_get <- function(endpoint, token) {
-  if(length(token) == 0)
-    token <- key_get("CLOCKIFY_TOKEN")
+clockify_get <- function(endpoint, token = NULL) {
+  clockify_(endpoint, token = token)
+}
 
+check_req <- function(req) {
+  if (req$status_code > 400)
+    rlang::abort(paste0(purrr::imap(httr::content(req), ~paste0(.y,": ",.x)), collapse = "\n"))
+}
+
+#' Convenience wrapper to post data to clockify API POST endpoints
+#'
+#' @param endpoint \code{(character)} vector of endpoint segments
+#' @param query \code{(named list)} of query parameters
+#' @param body \code{(named list)} of body parameters
+#' @param token \code{(character)} access token for desired user. Will be fetched from \link[keyring] if left blank.
+#' @param method \code{(character)} API Method to be used
+#'
+#' @return response code returned by request
+#' @export
+clockify_ <- function(endpoint, query = NULL, body = NULL, token = NULL, method = "GET", report = FALSE, encode = "json") {
+  if(is.null(token))
+    token <- keyring::key_get("CLOCKIFY_TOKEN")
   if(length(token) == 0)
     stop("No user token provided.")
-  endpoint <- gsub("^/", "", endpoint)
-  res <- GET(paste0("https://api.clockify.me/api/v1/", endpoint),
-            add_headers('X-Api-Key' = token))
-  content(res)
+
+  method <- UU::match_letters(method, n = 2, c("GET", "PATCH", "POST", "PUT", "DELETE"))
+  fn <- getFromNamespace(method, "httr")
+  .url <- httr::parse_url(ifelse(report, report_url, api_url))
+  .url$path <- append(.url$path, endpoint)
+
+  if (!is.null(query))
+    .url$query <- query
+  .args <- list(url = httr::build_url(.url),
+                add_headers('X-Api-Key' = token),
+                encode = "json")
+  if (!is.null(body))
+    .args$body <- body
+
+  res <- do.call(fn, .args)
+  check_req(res)
+
+  httr::content(res, encoding = "UTF-8")
 }
 
 #' Convenience wrapper to post data to clockify API POST endpoints
@@ -112,25 +170,10 @@ clockify_get <- function(endpoint, token) {
 #' @import httr
 #' @import keyring
 #' @export
-clockify_post <- function(endpoint, data, token, method = "POST") {
-  if(length(token) == 0)
-    token <- key_get("CLOCKIFY_TOKEN")
-  if(length(token) == 0)
-    stop("No user token provided.")
-  endpoint <- gsub("^/", "", endpoint)
-  if(method == "POST") {
-    res <- POST(paste0("https://api.clockify.me/api/v1/", endpoint),
-                body = data,
-                encode = "json",
-                add_headers('X-Api-Key' = token))
-  } else {
-    res <- PUT(paste0("https://api.clockify.me/api/v1/", endpoint),
-                body = data,
-                encode = "json",
-                add_headers('X-Api-Key' = token))
-  }
-  content(res)
+clockify_post <- function(endpoint, data, token = NULL, method = "POST") {
+  clockify_(endpoint, body = data, token = token, method)
 }
+
 
 #' Get workspaces
 #'
@@ -311,16 +354,13 @@ clockify_is_running <- function(workspace_id, token) {
 }
 
 
-.reports <- list(url = "https://reports.api.clockify.me/v1",
-                 path = rlang::expr(list(ws = "workspaces", wid = workspaceId, rep = "reports",
-                                         type = NULL)))
+
 
 clockify_get_report <-
   function(workspaceId = clockify_get_workspaces()[[1]],
            type = c("summary", "detailed", "weekly")[1],
            dateRangeStart = lubridate::floor_date(Sys.time(), "month"),
            dateRangeEnd = Sys.time(),
-           project = clockify_get_projects()[[1]],
            filter,
            exportType = c("CSV", "JSON")[1],
            token,
@@ -333,14 +373,21 @@ clockify_get_report <-
                                        subgroup = "TIME"))
 
     }
-    type <- UU::match_letters(type, c("summary", "detailed", "weekly"))
 
-    .url <- httr::parse_url(.reports$url)
-    .url$path <- rlang::eval_bare(.reports$path)
-    .url$path$type <- type
+    type <- UU::match_letters(type, c("summary", "detailed", "weekly"))
+    id_types <- c("users", "clients", "projects", "tags")
+
+
+
     .body <- rlang::dots_list(..., .named = TRUE)
-    .body$dateRangeStart <- paste0(lubridate::format_ISO8601(dateRangeStart), ".000Z")
-    .body$dateRangeEnd <- paste0(lubridate::format_ISO8601(dateRangeEnd), ".000Z")
+    .body <- purrr::list_modify(.body,
+                       !!!purrr::map(list(dateRangeStart = dateRangeStart, dateRangeEnd = dateRangeEnd), ~{
+                         if (is.character(.x))
+                           .x <- lubridate::as_datetime(.x)
+                         paste0(lubridate::format_ISO8601(.x), ".000Z")
+                       }))
+
+
     # add appropriate filter type
     if (filter$pageSize > 200) {
       filter$pageSize <- 200
@@ -353,7 +400,9 @@ clockify_get_report <-
     env <- environment()
     # Construct filters for simple entries
     purrr::iwalk(.body, ~{
-      if (!inherits(.x, "list") && UU::is_legit(.x) && .y %in% c("users", "clients", "projects", "tags")) {
+      if (!inherits(.x, "list") && length(.x) > 0 && .y %in% id_types) {
+        if (!all(purrr::map_lgl(.x, is_id)))
+          rlang::abort(paste0(paste0(id_types, collapse = ", "), " must be IDs."))
         .body[[.y]] <<- list(ids = list(.x), status = "ALL")
         .body[[.y]][[switch(.y, tags = "containedInTimeentry", clients = , projects = , users = "contains")]] <- "CONTAINS"
       }
@@ -367,18 +416,18 @@ clockify_get_report <-
     #   contains = "CONTAINS",
     #   status = "ALL"
     # )
-    if(missing(token))
-      token <- key_get("CLOCKIFY_TOKEN")
-    if(length(token) == 0)
-      stop("No user token provided.")
+    req <- clockify_(
+      list(
+        ws = "workspaces",
+        wid = workspaceId,
+        rep = "reports",
+        type = type
+      ),
+      body = .body,
+      report = TRUE,
+      method = "POST"
+    )
 
-    req <-
-      httr::content(httr::POST(
-        httr::build_url(.url),
-        body = .body,
-        encode = "json",
-        add_headers('X-Api-Key' = token)
-      ), encoding = "UTF-8")
 
     num_entries <- purrr::when(.body$exportType,
                                . == "JSON" ~ length(req$timeentries),
@@ -392,7 +441,7 @@ clockify_get_report <-
           httr::content(httr::POST(
             httr::build_url(.url),
             body = .body,
-            encode = "json",
+            encode = .body$exportType,
             add_headers('X-Api-Key' = token)
           ), encoding = "UTF-8")
       }
@@ -407,3 +456,29 @@ clockify_get_report <-
 
     out
   }
+
+#' @title Get clients
+#'
+#' @param name \code{(character)} Client name to filter for
+#' @param workspaceId \code{(character)} id for the workspace from which to load projects
+#' @param sort_column \code{(character)} The column to sort on
+#' @param sort_order \code{(character)} ASCENDING or DESCENDING
+#' @param archived \code{(logical)} Whether to return archived clients or not
+#' @return \code{(named list)} of clients
+#' @export
+clockify_get_clients <- function(name = NULL,
+                                 workspaceId = clockify_get_workspaces()[[1]],
+                                 sort_column = "NAME",
+                                 sort_order = c("ASCENDING", "DESCENDING")[1],
+                                 archived = FALSE) {
+  res <- clockify_(
+    c("workspaces", workspaceId, "clients"),
+    query = list(
+      name = name,
+      sort_column = sort_column,
+      sort_order = sort_order,
+      archived = archived
+    )
+  )
+  stats::setNames(res, purrr::map_chr(res, "name"))
+}
